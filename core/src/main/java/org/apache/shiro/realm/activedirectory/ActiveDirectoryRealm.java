@@ -29,9 +29,11 @@ import org.apache.shiro.realm.ldap.AbstractLdapRealm;
 import org.apache.shiro.realm.ldap.LdapContextFactory;
 import org.apache.shiro.realm.ldap.LdapUtils;
 import org.apache.shiro.subject.PrincipalCollection;
+import org.apache.shiro.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.naming.InvalidNameException;
 import javax.naming.NamingEnumeration;
 import javax.naming.NamingException;
 import javax.naming.directory.Attribute;
@@ -39,6 +41,8 @@ import javax.naming.directory.Attributes;
 import javax.naming.directory.SearchControls;
 import javax.naming.directory.SearchResult;
 import javax.naming.ldap.LdapContext;
+import javax.naming.ldap.LdapName;
+import javax.naming.ldap.Rdn;
 import java.util.*;
 
 
@@ -162,10 +166,7 @@ public class ActiveDirectoryRealm extends AbstractLdapRealm {
         SearchControls searchCtls = new SearchControls();
         searchCtls.setSearchScope(SearchControls.SUBTREE_SCOPE);
 
-        String userPrincipalName = username;
-        if (principalSuffix != null && !userPrincipalName.toLowerCase(Locale.ROOT).endsWith(principalSuffix.toLowerCase(Locale.ROOT))) {
-            userPrincipalName += principalSuffix;
-        }
+        String userPrincipalName = getUsernameWithSuffixOrFullDN(username);
 
         Object[] searchArguments = new Object[]{userPrincipalName};
 
@@ -200,6 +201,37 @@ public class ActiveDirectoryRealm extends AbstractLdapRealm {
             }
         }
         return roleNames;
+    }
+
+    /**
+     * Returns the username to use in the role search.
+     * If {@link #principalSuffix} is configured, the sanitized username with appended suffix will be returned.
+     * If {@link #principalSuffix} is not configured, the method will check if the username is a valid LDAP DN.
+     * If it is a valid LDAP DN, the username will be returned as-is,
+     * otherwise the sanitized username will be returned.
+     *
+     * @param username input to check and sanitize
+     * @return the sanitized username with optional suffix to use in the role search
+     */
+    protected String getUsernameWithSuffixOrFullDN(String username) {
+        if (!StringUtils.hasText(principalSuffix)) {
+            try {
+                LdapName ldapName = new LdapName(username);
+                // Full LDAP DN needs to have more than one RDN, so we can return the username as-is
+                if (ldapName.size() > 1) {
+                    return username;
+                }
+            } catch (InvalidNameException e) {
+                // Not a valid LDAP DN, so treat it as a regular username.
+            }
+        }
+
+        String sanitizedUsername = Rdn.escapeValue(username);
+        if (principalSuffix != null
+                && !sanitizedUsername.toLowerCase(Locale.ROOT).endsWith(principalSuffix.toLowerCase(Locale.ROOT))) {
+            return sanitizedUsername + principalSuffix;
+        }
+        return sanitizedUsername;
     }
 
     /**

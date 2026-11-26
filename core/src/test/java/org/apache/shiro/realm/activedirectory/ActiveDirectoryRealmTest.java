@@ -45,6 +45,7 @@ import javax.naming.NamingException;
 import javax.naming.directory.SearchControls;
 import javax.naming.directory.SearchResult;
 import javax.naming.ldap.LdapContext;
+import javax.naming.ldap.Rdn;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -53,8 +54,10 @@ import static org.easymock.EasyMock.anyObject;
 import static org.easymock.EasyMock.anyString;
 import static org.easymock.EasyMock.capture;
 import static org.easymock.EasyMock.createMock;
+import static org.easymock.EasyMock.createNiceMock;
 import static org.easymock.EasyMock.expect;
 import static org.easymock.EasyMock.replay;
+import static org.easymock.EasyMock.verify;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.assertTrue;
@@ -121,6 +124,70 @@ public class ActiveDirectoryRealmTest {
         // suffix matches user entry
         assertExistingUserSuffix(USERNAME + "@example.com", "testuser@example.com");
         assertExistingUserSuffix(USERNAME + "@EXAMPLE.com", "testuser@EXAMPLE.com");
+    }
+
+    @Test
+    public void testUserPrincipalNameDnSpecialCharactersEscaped() throws Exception {
+        // RFC 2253 special characters in the submitted username must be escaped, not interpreted
+        assertExistingUserSuffix(USERNAME + ",cn=admins", "testuser\\,cn\\=admins@ExAmple.COM");
+        assertExistingUserSuffix(USERNAME + "+cn=admin", "testuser\\+cn\\=admin@ExAmple.COM");
+        assertExistingUserSuffix(USERNAME + ";ou=admins@example.com", "testuser\\;ou\\=admins@example.com");
+        assertExistingUserSuffix("\"" + USERNAME + "\"", "\\\"testuser\\\"@ExAmple.COM");
+    }
+
+    @Test
+    public void usernameForRoleSearchWithDnAndSuffix() {
+        ActiveDirectoryRealm activeDirectoryRealm = new ActiveDirectoryRealm();
+        activeDirectoryRealm.setPrincipalSuffix("@example.com");
+
+        String dn = "CN=my_name,OU=Development,OU=Special Accounts,DC=mycompany,DC=com";
+
+        assertThat(activeDirectoryRealm.getUsernameWithSuffixOrFullDN(dn), is(Rdn.escapeValue(dn) + "@example.com"));
+    }
+
+    @Test
+    public void usernameForRoleSearchWithDn() {
+        ActiveDirectoryRealm activeDirectoryRealm = new ActiveDirectoryRealm();
+
+        String dn = "CN=my_name,OU=Development,OU=Special Accounts,DC=mycompany,DC=com";
+
+        assertThat(activeDirectoryRealm.getUsernameWithSuffixOrFullDN(dn), is(dn));
+    }
+
+    @Test
+    public void usernameForRoleSearchWithUsername() {
+        ActiveDirectoryRealm activeDirectoryRealm = new ActiveDirectoryRealm();
+
+        assertThat(activeDirectoryRealm.getUsernameWithSuffixOrFullDN("test,user"), is("test\\,user"));
+    }
+
+    @Test
+    public void authorizationUsesDnWithoutEscaping() throws Exception {
+        ActiveDirectoryRealm activeDirectoryRealm = new ActiveDirectoryRealm();
+
+        LdapContext ldapContext = createNiceMock(LdapContext.class);
+        NamingEnumeration<SearchResult> results = createNiceMock(NamingEnumeration.class);
+
+        String dn = "CN=my_name,OU=Development,OU=Special Accounts,DC=mycompany,DC=com";
+
+        Capture<Object[]> captureArgs = Capture.newInstance(CaptureType.ALL);
+
+        expect(ldapContext.search(
+                anyString(),
+                anyString(),
+                capture(captureArgs),
+                anyObject(SearchControls.class)))
+                .andReturn(results);
+
+        replay(ldapContext);
+
+        activeDirectoryRealm.getRoleNamesForUser(dn, ldapContext);
+
+        Object[] searchArguments = captureArgs.getValue();
+
+        assertThat(searchArguments[0], is(dn));
+
+        verify(ldapContext);
     }
 
     public void assertExistingUserSuffix(String username, String expectedPrincipalName) throws Exception {
